@@ -235,8 +235,8 @@
     </div>
     <div class="field-label" id="diffLabel">▸ 작전 난이도</div>
     <div class="diffs" id="diffRow">
-      <button class="diff sel" id="dEasy" onclick="selDiff('easy')"><div class="dt">정찰전</div><div class="dd">적이 약하고 자원 넉넉. 적당히 풀어도 정복 가능</div></button>
-      <button class="diff" id="dHard" onclick="selDiff('hard')"><div class="dt">정예전</div><div class="dd">적이 거세고 빠듯. 빠르고 정확해야 적 기지 정복</div></button>
+      <button class="diff sel" id="dEasy" onclick="selDiff('easy')"><div class="dt">정찰전</div><div class="dd">푸는 동안 전투가 느려짐. 적당히 풀면 정복 가능 · 보스 등장</div></button>
+      <button class="diff" id="dHard" onclick="selDiff('hard')"><div class="dt">정예전</div><div class="dd">⚡ 실시간 — 전투가 멈추지 않는다! 보스 + ☄ 메테오. 진짜 어렵다</div></button>
     </div>
     <button class="btn btn-primary" id="startBtn" style="margin-top:14px;" onclick="startGame()">진군 시작 ▶</button>
     <p class="small" id="entryNote">디벗 가로 화면 권장 · 전투는 자동, 문제는 탭으로 · 제한시간 없음</p>
@@ -248,6 +248,7 @@
       <div class="left">
         <span class="chip age">시대 <b id="hAge">석기시대</b></span>
         <span class="chip">자원 <b id="hRes" style="color:var(--good)">0</b></span>
+        <span class="chip">출격 대기 <b id="hQ">0</b></span>
         <span class="chip score">점수 <b id="hScore">0</b></span>
         <button class="chip sndbtn" id="sndBtn" onclick="toggleSound()">🔇 소리</button>
       </div>
@@ -305,7 +306,7 @@
     <!-- 2P 대전 조작부: 왼쪽 학생=1P(아군 진영), 오른쪽 학생=2P(적 진영) -->
     <div class="duoArea hide" id="duoArea">
       <div class="dpanel p1">
-        <div class="dhead"><span class="dname" style="color:var(--accent)">1P (왼쪽)</span><span class="dstat">자원 <b id="d0_gold">0</b> · 콤보 <b id="d0_combo">0</b></span></div>
+        <div class="dhead"><span class="dname" style="color:var(--accent)">1P (왼쪽)</span><span class="dstat">자원 <b id="d0_gold">0</b> · 대기 <b id="d0_q">0</b> · 콤보 <b id="d0_combo">0</b></span></div>
         <div class="dsummon" id="d0_summon"></div>
         <button class="devo" id="d0_evo" onpointerdown="duoEvolve(0)" disabled><i id="d0_evofill"></i><span id="d0_evotxt">⬆ 진화</span></button>
         <div class="dq">
@@ -316,7 +317,7 @@
         </div>
       </div>
       <div class="dpanel p2">
-        <div class="dhead"><span class="dname" style="color:var(--accent-2)">2P (오른쪽)</span><span class="dstat">자원 <b id="d1_gold">0</b> · 콤보 <b id="d1_combo">0</b></span></div>
+        <div class="dhead"><span class="dname" style="color:var(--accent-2)">2P (오른쪽)</span><span class="dstat">자원 <b id="d1_gold">0</b> · 대기 <b id="d1_q">0</b> · 콤보 <b id="d1_combo">0</b></span></div>
         <div class="dsummon" id="d1_summon"></div>
         <button class="devo" id="d1_evo" onpointerdown="duoEvolve(1)" disabled><i id="d1_evofill"></i><span id="d1_evotxt">⬆ 진화</span></button>
         <div class="dq">
@@ -391,8 +392,9 @@ const BASE_ATK=12, BASE_RANGE=160, BASE_CD=1.1;
 // 적 시대 상승 기준: "맞힌 문제 수"(hard 기준). easy는 enemyAgeScale로 더 천천히.
 const ENEMY_AGE_AT=[5,11,19,30];
 const DIFF={
-  easy:{baseHp:1500,enemyMult:0.74,spawnInterval:3.0,enemyAgeScale:1.5,ageFloorSec:85,ageFloorCap:2},
-  hard:{baseHp:1500,enemyMult:0.92,spawnInterval:2.2,enemyAgeScale:1.0,ageFloorSec:75,ageFloorCap:4,otBonus:1.2}
+  easy:{baseHp:1500,enemyMult:0.74,spawnInterval:3.0,enemyAgeScale:1.5,ageFloorSec:85,ageFloorCap:2,bossHp:6,bossAtk:2.2},
+  hard:{baseHp:1500,enemyMult:0.86,spawnInterval:2.5,enemyAgeScale:1.0,ageFloorSec:75,ageFloorCap:4,otBonus:1.2,
+        realtime:true,meteor:true,bossHp:9,bossAtk:3}
 };
 let CFG=DIFF.hard;
 const UNIT_TYPES={
@@ -438,6 +440,23 @@ function stepBattle(s,dt){
         if(Math.abs(a.x-u.x)<=u.range){const r=a.hp/a.maxHp;if(r<worst){worst=r;tg=a;}}}
       if(tg){tg.hp=Math.min(tg.maxHp,tg.hp+u.heal);u.lastHeal=s.t;}
     }
+    // 보스 내려찍기: 주변 아군을 광역으로 쓸어버린다
+    if(u.isBoss && !u.dead && s.t-u.lastSlam>=BOSS_SLAM_CD){
+      let hitAny=false;
+      for(const a of U){
+        if(a.dead||a.side===u.side||a.isBase)continue;
+        if(Math.abs(a.x-u.x)<=BOSS_SLAM_R){
+          a.hp-=u.atk*1.6; a.flash=0.2; hitAny=true;
+          fxSpark(a.x,unitY(a),"#ff5a3c",6);
+          if(a.hp<=0){ a.dead=true; fxSpark(a.x,unitY(a),"#ff5a3c",10); fxRing(a.x,unitY(a),"#ff5a3c",34); }
+        }
+      }
+      if(hitAny){
+        u.lastSlam=s.t;
+        fxShock(u.x,"#ff5a3c"); fxRing(u.x,GROUND_Y,"#ffffff",BOSS_SLAM_R); addShake(8); sKill();
+        fxPopup(u.x,GROUND_Y-70,"내려찍기!","#ff5a3c",true);
+      }
+    }
     let foe=null,fd=Infinity;
     for(const e of U){if(e.dead||e.side===u.side)continue;const d=Math.abs(e.x-u.x);if(d<fd){fd=d;foe=e;}}
     if(!foe)continue;
@@ -458,7 +477,16 @@ function stepBattle(s,dt){
           if(!foe.isBase){
             fxSpark(foe.x,fy,hitCol,12); fxRing(foe.x,fy,hitCol,40);
             if(s.mode==="duo"){ const pl=s.duo.p[u.side==="ally"?0:1]; pl.evo+=EVO_PER_KILL; pl.kills++; addShake(1.2); if(Math.random()<0.4)sKill(); }
-            else if(u.side==="ally"){ s.kills++; s.score+=15; s.evo+=EVO_PER_KILL; addShake(1.6); if(Math.random()<0.5)sKill(); }
+            else if(u.side==="ally"){
+              s.kills++; s.score+=15; s.evo+=EVO_PER_KILL; addShake(1.6); if(Math.random()<0.5)sKill();
+              if(foe.isBoss){   // 보스 격파 보상
+                s.gold=Math.min(GOLD_CAP,s.gold+BOSS_GOLD); s.evo+=BOSS_EVO; s.score+=80;
+                toast("👑 보스 격파! 자원 +"+BOSS_GOLD+" · 진화 +"+BOSS_EVO,"#ffd24a");
+                fxFlash("#ffd24a",0.4); addShake(10);
+                fxSpark(foe.x,fy,"#ffd24a",22); fxRing(foe.x,fy,"#ffd24a",80);
+                sWin(); updateSummonBar();
+              }
+            }
           }
         }
       }
@@ -486,13 +514,18 @@ function updateEnemyAI(s,dt){
     s.enemyBaseFlash=0.5; fxRing(ENEMY_BASE_X,GROUND_Y-72,"#ff9a9a",70);
     toast("⚠ 적군이 "+AGES[s.enemyAge]+"로 진화!","#ff9a9a");
   }
+  // 보스: 적이 시대를 올릴 때마다 등장 + 오래 안 나오면 주기 등장(점점 어려워지는 무대)
+  if(s.enemyAge>s.bossSpawned){ spawnBoss(s,s.enemyAge); s.bossSpawned=s.enemyAge; s.lastBossWall=s.wall; }
+  else if(s.wall-(s.lastBossWall||0)>70 && !anyBossAlive(s)){ spawnBoss(s,s.enemyAge); s.lastBossWall=s.wall; }
   s.enemySpawnTimer-=dt;
   if(s.enemySpawnTimer<=0){
     const eu=makeEnemyUnit(s.enemyAge,Math.random()<0.65?"grunt":"shooter");
     let r=battleRamp(); if(r>1&&CFG.otBonus)r*=CFG.otBonus;   // 하드: 총력전에서 적이 한층 더 거세짐
     if(r>1){eu.hp*=r;eu.maxHp*=r;eu.atk*=r;}
     s.units.push(eu);
-    s.enemySpawnTimer=CFG.spawnInterval;
+    // 시간이 흐를수록 적 물량이 서서히 늘어난다(모든 난이도 공통 점증)
+    const accel=Math.max(0.62, 1-(s.wall||0)/240*0.38);
+    s.enemySpawnTimer=CFG.spawnInterval*accel;
   }
 }
 function canEvolve(s){ return s.allyAge<4 && s.evo>=EVO_NEED[s.allyAge]; }
@@ -506,6 +539,7 @@ function evolveAlly(s){
 function freshBattle(){
   const ab=makeBase("ally",0), eb=makeBase("enemy",0);
   return {t:0,wall:0,units:[ab,eb],allyBase:ab,enemyBase:eb,allyAge:0,enemyAge:0,evo:0,
+    spawnQ:[],spawnT:0,qLock:false,bossSpawned:0,lastBossWall:0,meteorNext:0,meteorWarn:null,
     enemySpawnTimer:1.5,enemySpawnInterval:CFG.spawnInterval,enemyAgeClock:0,
     kills:0,score:0,done:false,win:false,paused:false,
     phase:"solve",solveFreeze:true,burstTimer:0,
@@ -614,6 +648,12 @@ const SOLO_OT=160;            // 솔로 총력전 시작(실제 경과 초) — 
 const SUDDEN_AFTER=80;        // 총력전 후 이 시간이 더 지나면 서든데스: 두 기지가 서서히 침식 → 반드시 결착
 const SUDDEN_RATE=0.006;      // 서든데스 침식: 초당 최대체력의 0.6%
 const IDLE_GRACE=20;          // 문제당 슬로모션 보호 시간(초) — 이후 서서히 정상 속도로(방치 방지)
+const GOLD_CAP=40;            // 자원 상한 — 몰아풀고 한 번에 쏟아붓기 방지
+const SPAWN_GAP=0.9;          // 소환 대기열: 병사는 이 간격(초)으로 한 명씩 출격
+const BOSS_SLAM_CD=6;         // 보스 내려찍기 주기(초)
+const BOSS_SLAM_R=95;         // 내려찍기 광역 반경
+const BOSS_GOLD=15, BOSS_EVO=8;  // 보스 격파 보상
+const METEOR_R=70;            // 메테오 폭발 반경(정예전 전용)
 let curQ=null, curConcept=null, curDispAns=0;
 
 /* ----- 연출(FX) 시스템 : 캔버스 좌표(0..1000, 0..340) 기준 ----- */
@@ -766,12 +806,9 @@ function summon(tk){
   const t=UNIT_TYPES[tk];
   if(G.gold>=t.cost){
     G.gold-=t.cost;
-    const u=makeUnit("ally",tk,G.allyAge);
-    const r=battleRamp(); if(r>1){u.hp*=r;u.maxHp*=r;u.atk*=r;}
-    G.units.push(u);
+    G.spawnQ.push(tk);              // 즉시 출현 대신 대기열 — 한 명씩 출격
     updateSummonBar();
-    fxSpark(ALLY_BASE_X+22,GROUND_Y+18,t.color,7);
-    sSummon();
+    fxSpark(ALLY_BASE_X+22,GROUND_Y+18,t.color,4);
   } else {
     toast("자원 부족 — 문제를 맞혀 모으자","var(--line)");
   }
@@ -786,6 +823,7 @@ function updateSummonBar(){
     if(rf) rf.style.width=Math.min(100,G.gold/t.cost*100)+"%";
   }
   const hr=document.getElementById("hRes"); if(hr)hr.textContent=G.gold;
+  const hq=document.getElementById("hQ"); if(hq)hq.textContent=(G.spawnQ||[]).length;
 }
 
 /* ----- 문제 ----- */
@@ -805,7 +843,16 @@ function nextQuestion(){
   const ob=document.getElementById("qOpts");
   ob.innerHTML=dispOpts.map((o,k)=>`<button class="opt" onclick="pick(${k})">${o}</button>`).join("");
   document.getElementById("qFlash").textContent="";
-  enterSolvePhase();
+  G.qLock=false;
+  if(G.mode==="solo"&&CFG.realtime) enterRealtimeQ(); else enterSolvePhase();
+}
+function enterRealtimeQ(){   // 정예전: 전투가 멈추지 않는 실시간 출제
+  if(!G)return;
+  G.phase="solve"; G.solveFreeze=false; G.burstTimer=0;
+  document.getElementById("burstRow").classList.add("hide");
+  document.getElementById("qHeadTxt").textContent="작전 지령 · 실시간 — 전투는 멈추지 않는다!";
+  const pb=document.getElementById("phaseBadge");
+  pb.className="phaseBadge show burst"; pb.textContent="⚡ 실시간 작전 · 정예전";
 }
 function enterSolvePhase(){
   if(!G)return;
@@ -825,7 +872,8 @@ function enterBurstPhase(){
 }
 function skipBurst(){ if(G&&!G.ended&&G.phase==="burst") G.burstTimer=0; }
 function pick(k){
-  if(!G||G.ended||G.mode!=="solo"||G.phase!=="solve")return;   // 돌격(버스트) 중에는 입력 차단
+  if(!G||G.ended||G.mode!=="solo"||G.phase!=="solve"||G.qLock)return;
+  G.qLock=true;
   const correct=k===curDispAns;
   G.totalTry++;
   const d=curConcept; if(!G.diagStat[d])G.diagStat[d]={try:0,correct:0};
@@ -839,11 +887,12 @@ function pick(k){
     G.combo++; if(G.combo>G.maxCombo)G.maxCombo=G.combo;
     const comboBonus=Math.min(Math.floor(G.combo/3),5);
     const gain=RES_PER_SOLVE+comboBonus;
-    G.gold+=gain;
+    const wasCap=G.gold+gain>GOLD_CAP;
+    G.gold=Math.min(GOLD_CAP,G.gold+gain);
     G.evo+=EVO_PER_CORRECT;
     G.score+=20+comboBonus*5;
     flash.style.color=col;
-    flash.textContent=`✓ 자원 +${gain}${comboBonus?`  (콤보 +${comboBonus})`:""} — 아무 병종이나 소환!`;
+    flash.textContent=wasCap?`✓ 자원 최대(${GOLD_CAP})! 병사를 뽑아 소모하자`:`✓ 자원 +${gain}${comboBonus?`  (콤보 +${comboBonus})`:""}`;
     updateSummonBar(); updateEvoBtn();
     // 즉시 보상 연출: 에너지 탄환이 아군 기지로 → 충전 펄스
     const bx=ALLY_BASE_X, by=GROUND_Y-72;
@@ -863,7 +912,8 @@ function pick(k){
   }
   document.getElementById("qCombo").textContent=G.combo;
   document.getElementById("hScore").textContent=G.score;
-  enterBurstPhase();   // 곧장 다음 문제 대신, 4초간 라이브 돌격
+  if(CFG.realtime){ setTimeout(()=>{ if(G&&!G.ended) nextQuestion(); },550); }   // 정예전: 즉시 다음 문제
+  else enterBurstPhase();   // 정찰전: 잠시 라이브 돌격 후 다음 문제
 }
 function comboMilestone(n){
   if(!(n===3||n===5||(n>=10&&n%5===0)))return;
@@ -923,6 +973,7 @@ function doEvolve(){
 function updateHUD(){
   document.getElementById("hScore").textContent=G.score;
   const hr=document.getElementById("hRes"); if(hr)hr.textContent=G.gold;
+  const hq=document.getElementById("hQ"); if(hq)hq.textContent=(G.spawnQ||[]).length;
   const a=Math.max(0,G.allyBase.hp), e=Math.max(0,G.enemyBase.hp);
   document.getElementById("hAllyBase").style.width=(a/G.allyBase.maxHp*100)+"%";
   document.getElementById("hEnemyBase").style.width=(e/G.enemyBase.maxHp*100)+"%";
@@ -937,6 +988,7 @@ function loop(ts){
       G.wall=(G.wall||0)+dt;
       if(G.mode==="duo"){
         const sdt=dt*BATTLE_SPEED;        // 2P: 항상 정상 속도 실시간
+        processSpawnQ(sdt);
         stepBattle(G,sdt);
         duoOvertimeCheck();
         suddenDeath(dt);
@@ -945,16 +997,19 @@ function loop(ts){
         if(checkEnd(G)) endGameDuo(G.win?0:1,false);
       } else {
         if(G.phase==="solve") G.solveClock=(G.solveClock||0)+dt;
-        // 푸는 동안 슬로모션 — 단, 한 문제를 너무 오래 방치하면 서서히 정상 속도로(무응답 보호 방지)
-        const scale = (G.phase==="solve")
-          ? Math.min(1, SOLVE_SLOWMO + Math.max(0,(G.solveClock||0)-IDLE_GRACE)*0.06)
-          : 1;
+        // 정찰전: 푸는 동안 슬로모션(방치 시 서서히 해제) · 정예전: 항상 전속 실시간
+        const scale = CFG.realtime ? 1
+          : (G.phase==="solve")
+            ? Math.min(1, SOLVE_SLOWMO + Math.max(0,(G.solveClock||0)-IDLE_GRACE)*0.06)
+            : 1;
         const sdt = dt*scale*BATTLE_SPEED;
+        processSpawnQ(sdt);
         if(!G.otFlag && G.wall>SOLO_OT){ G.otFlag=true; toast("⚡ 총력전! 이제 소환 부대가 점점 강해진다","#ffd24a"); fxFlash("#ffd24a",0.3); addShake(6); }
         suddenDeath(dt);
+        meteorTick(dt);
         updateEnemyAI(G,sdt);
         stepBattle(G,sdt);
-        if(G.phase==="burst"){
+        if(!CFG.realtime && G.phase==="burst"){
           G.burstTimer-=dt;   // 돌격 카운트다운은 실시간
           const bf=document.getElementById("burstFill"); if(bf)bf.style.width=Math.max(0,G.burstTimer/BURST_SECONDS*100)+"%";
           const pb=document.getElementById("phaseBadge"); if(pb)pb.textContent="⚔ 돌격! 다음 문제까지 "+Math.ceil(Math.max(0,G.burstTimer))+"초";
@@ -1022,6 +1077,20 @@ function render(){
   const us=G.units.filter(u=>!u.isBase).sort((a,b)=>unitY(a)-unitY(b));
   for(const u of us) drawUnit(u);
   renderFx();
+  // 메테오 낙하 경고 표식(빨간 원 점멸)
+  if(G.meteorWarn){
+    const pulse=0.45+0.4*Math.sin(performance.now()/90);
+    for(const mx of G.meteorWarn.xs){
+      ctx.globalAlpha=pulse;
+      ctx.strokeStyle="#ff5a3c";ctx.lineWidth=3;
+      ctx.beginPath();ctx.arc(mx,GROUND_Y+12,METEOR_R*0.75,0,7);ctx.stroke();
+      ctx.fillStyle="rgba(255,90,60,.18)";
+      ctx.beginPath();ctx.arc(mx,GROUND_Y+12,METEOR_R*0.75,0,7);ctx.fill();
+      ctx.globalAlpha=1;
+      ctx.fillStyle="#ff8a3c";ctx.font="bold 14px 'Courier New',monospace";ctx.textAlign="center";
+      ctx.fillText("☄",mx,GROUND_Y-38);
+    }
+  }
   ctx.restore();
   // 전체 섬광(흔들림 영향 X)
   if(G.flashA>0){ ctx.globalAlpha=Math.min(0.82,G.flashA); ctx.fillStyle=G.flashCol; ctx.fillRect(0,0,ARENA_W,ARENA_H); ctx.globalAlpha=1; }
@@ -1087,13 +1156,17 @@ function drawCastle(base,side){
 function drawUnit(u){
   const y=unitY(u);
   const dir=u.side==="ally"?1:-1;
-  const sc=1+(u.age||0)*0.06;
+  const sc=(1+(u.age||0)*0.06)*(u.bossScale||1);
   ctx.fillStyle="rgba(0,0,0,.26)";
   ctx.beginPath();ctx.ellipse(u.x,y+10*sc,8*sc,3*sc,0,0,7);ctx.fill();
   ctx.save();ctx.translate(u.x,y+10*sc);ctx.scale(dir*sc,sc);drawChar(u);ctx.restore();
   const top=y+10*sc-30*sc, w=18*sc, hpr=Math.max(0,u.hp/u.maxHp);
   ctx.fillStyle="rgba(0,0,0,.5)";ctx.fillRect(u.x-w/2,top,w,3);
   ctx.fillStyle=u.side==="ally"?"#5fe3a1":"#ff6b6b";ctx.fillRect(u.x-w/2,top,w*hpr,3);
+  if(u.isBoss){
+    ctx.fillStyle="#ff5a3c";ctx.font="bold 11px 'Courier New',monospace";ctx.textAlign="center";ctx.textBaseline="bottom";
+    ctx.fillText("👑 BOSS",u.x,top-3);
+  }
 }
 
 // 오른쪽을 향한 캐릭터, 발밑(0,0) 기준 위로 그림
@@ -1270,12 +1343,13 @@ function setSoloUiVisible(v){
   document.getElementById("duoArea").classList.toggle("hide",v);
   document.getElementById("phaseBadge").classList.toggle("hide",!v);
   document.getElementById("hRes").parentElement.style.display=v?"":"none";
+  document.getElementById("hQ").parentElement.style.display=v?"":"none";
   document.getElementById("hScore").parentElement.style.display=v?"":"none";
   document.getElementById("hAge").parentElement.style.display=v?"":"none";
   document.getElementById("hAllyLabel").textContent=v?"아군 기지":"1P 기지 (왼쪽)";
   document.getElementById("hEnemyLabel").textContent=v?"적 기지":"2P 기지 (오른쪽)";
 }
-function mkDuoPlayer(side){ return {side,gold:0,combo:0,maxCombo:0,totalTry:0,totalCorrect:0,diagStat:{},evo:0,age:0,kills:0,di:0,curQ:null,curC:null,ans:0,lock:false}; }
+function mkDuoPlayer(side){ return {side,q:[],qt:0,gold:0,combo:0,maxCombo:0,totalTry:0,totalCorrect:0,diagStat:{},evo:0,age:0,kills:0,di:0,curQ:null,curC:null,ans:0,lock:false}; }
 function buildDuoDeck(){
   // 공정성: 두 사람 모두 같은 "개념 순서"를 밟는다.
   // 커닝 방지: 같은 슬롯이라도 두 사람이 받는 "문제 자체"는 다르다 → 옆 화면 답 베끼기 무의미.
@@ -1341,7 +1415,7 @@ function duoPick(pi,k){
     pl.combo++; if(pl.combo>pl.maxCombo)pl.maxCombo=pl.combo;
     const bonus=Math.min(Math.floor(pl.combo/3),5);
     const gain=RES_PER_SOLVE+bonus;
-    pl.gold+=gain; pl.evo+=EVO_PER_CORRECT;
+    pl.gold=Math.min(GOLD_CAP,pl.gold+gain); pl.evo+=EVO_PER_CORRECT;
     flash.style.color=CONCEPT_COLOR[c];
     flash.textContent=`✓ 자원 +${gain}${bonus?` (콤보 +${bonus})`:""}`;
     const bx=pi===0?ALLY_BASE_X:ENEMY_BASE_X, by=GROUND_Y-72;
@@ -1364,6 +1438,50 @@ function duoComboFx(pi,n){
   cb.classList.remove("pop"); void cb.offsetWidth; cb.classList.add("pop");
   addShake(4); sCombo(n);
 }
+function sBoss(){ tone(98,0.7,"sawtooth",0.16,60); tone(65,0.9,"sawtooth",0.14,48,0.12); noise(0.25,0.07); }
+function sMeteor(){ noise(0.35,0.12); tone(180,0.5,"sawtooth",0.14,50); }
+function anyBossAlive(s){ return s.units.some(u=>u.isBoss&&!u.dead); }
+function spawnBoss(s,age){
+  const b=makeEnemyUnit(age,"grunt");
+  b.isBoss=true; b.bossScale=2.15; b.name="보스";
+  b.color="#ff5a3c";
+  b.hp*=CFG.bossHp; b.maxHp=b.hp; b.atk*=CFG.bossAtk;
+  b.speed*=0.55; b.range=26; b.cd=1.25; b.lastSlam=s.t;
+  const r=battleRamp(); if(r>1){b.hp*=r;b.maxHp*=r;b.atk*=r;}
+  s.units.push(b);
+  const wb=document.getElementById("waveBanner");
+  wb.textContent="⚠ 보스 접근! ("+AGES[age]+")"; wb.classList.add("show"); bannerTimer=2.4;
+  fxFlash("#ff5a3c",0.4); addShake(9); fxShock(ENEMY_BASE_X-40,"#ff5a3c");
+  sBoss();
+}
+function processSpawnQ(sdt){
+  if(G.mode==="duo"){
+    for(let pi=0;pi<2;pi++){
+      const pl=G.duo.p[pi];
+      pl.qt-=sdt;
+      if(pl.qt<=0 && pl.q.length){
+        const tk=pl.q.shift(), t=UNIT_TYPES[tk];
+        const u=makeUnit(pl.side,tk,pl.age);
+        const r=battleRamp(); if(r>1){u.hp*=r;u.maxHp*=r;u.atk*=r;}
+        G.units.push(u);
+        fxSpark(pl.side==="ally"?ALLY_BASE_X+26:ENEMY_BASE_X-26,GROUND_Y+16,t.color,6);
+        sSummon();
+        pl.qt=SPAWN_GAP;
+      }
+    }
+  } else {
+    G.spawnT-=sdt;
+    if(G.spawnT<=0 && G.spawnQ.length){
+      const tk=G.spawnQ.shift(), t=UNIT_TYPES[tk];
+      const u=makeUnit("ally",tk,G.allyAge);
+      const r=battleRamp(); if(r>1){u.hp*=r;u.maxHp*=r;u.atk*=r;}
+      G.units.push(u);
+      fxSpark(ALLY_BASE_X+22,GROUND_Y+18,t.color,7);
+      sSummon();
+      G.spawnT=SPAWN_GAP;
+    }
+  }
+}
 function battleRamp(){ const ot=G.mode==="duo"?DUO_OT:SOLO_OT; return Math.min(5, 1+Math.max(0,G.wall-ot)*0.015); }
 function duoRamp(){ return battleRamp(); }
 function duoOvertimeCheck(){
@@ -1371,6 +1489,41 @@ function duoOvertimeCheck(){
     G.duo.ot=true;
     toast("⚡ 총력전! 이제 소환 부대가 점점 강해진다","#ffd24a");
     fxFlash("#ffd24a",0.3); addShake(6);
+  }
+}
+function meteorTick(dt){   // 정예전 전용: 하늘의 재앙
+  if(!CFG.meteor||G.mode!=="solo")return;
+  if(!G.meteorNext) G.meteorNext=45+Math.random()*15;   // 첫 낙하는 45~60초쯤
+  if(G.meteorWarn){
+    G.meteorWarn.t-=dt;
+    if(G.meteorWarn.t<=0){
+      for(const mx of G.meteorWarn.xs){
+        fxBolt(mx-14,-30,mx,GROUND_Y+8,"#ff8a3c");
+        fxSpark(mx,GROUND_Y,"#ff8a3c",18); fxSpark(mx,GROUND_Y,"#ffffff",10);
+        fxRing(mx,GROUND_Y,"#ff8a3c",METEOR_R+10);
+        const dmg=55+G.enemyAge*9;
+        for(const a of G.units){
+          if(a.dead||a.side!=="ally"||a.isBase)continue;
+          if(Math.abs(a.x-mx)<=METEOR_R){
+            a.hp-=dmg; a.flash=0.22;
+            if(a.hp<=0){ a.dead=true; fxSpark(a.x,unitY(a),"#ff8a3c",10); }
+          }
+        }
+      }
+      addShake(11); fxFlash("#ff8a3c",0.35); sMeteor();
+      G.meteorWarn=null;
+      G.meteorNext=G.wall+25+Math.random()*10;
+    }
+  } else if(G.wall>=G.meteorNext){
+    const axs=G.units.filter(u=>!u.dead&&u.side==="ally"&&!u.isBase).map(u=>u.x);
+    const n=2+(Math.random()<0.5?1:0), xs=[];
+    for(let i=0;i<n;i++){
+      xs.push(axs.length?axs[Math.floor(Math.random()*axs.length)]+(Math.random()*40-20)
+                        :ALLY_BASE_X+80+Math.random()*380);
+    }
+    G.meteorWarn={xs,t:1.5};
+    toast("☄ 메테오 경보! 낙하 지점을 확인하라","#ff8a3c");
+    sWrong();
   }
 }
 function suddenDeath(dt){   // 총력전 후에도 안 끝나면 두 기지가 서서히 침식 — 모든 판은 반드시 끝난다
@@ -1385,11 +1538,8 @@ function duoSummon(pi,tk){
   const pl=G.duo.p[pi], t=UNIT_TYPES[tk];
   if(pl.gold<t.cost)return;
   pl.gold-=t.cost;
-  const u=makeUnit(pl.side,tk,pl.age);
-  const r=duoRamp(); if(r>1){u.hp*=r;u.maxHp*=r;u.atk*=r;}
-  G.units.push(u);
-  fxSpark(pl.side==="ally"?ALLY_BASE_X+26:ENEMY_BASE_X-26,GROUND_Y+16,t.color,6);
-  sSummon();
+  pl.q.push(tk);                    // 대기열 — 한 명씩 출격
+  fxSpark(pl.side==="ally"?ALLY_BASE_X+26:ENEMY_BASE_X-26,GROUND_Y+16,t.color,4);
   updateDuoHud();
 }
 function duoEvolve(pi){
@@ -1422,6 +1572,7 @@ function updateDuoHud(){
     const pl=G.duo.p[pi];
     document.getElementById("d"+pi+"_gold").textContent=pl.gold;
     document.getElementById("d"+pi+"_combo").textContent=pl.combo;
+    const dq=document.getElementById("d"+pi+"_q"); if(dq)dq.textContent=pl.q.length;
     for(const tk of Object.keys(UNIT_TYPES)){
       const t=UNIT_TYPES[tk];
       const b=document.getElementById("d"+pi+"_ub_"+tk), rf=document.getElementById("d"+pi+"_rf_"+tk);
