@@ -549,7 +549,8 @@ function evolveAlly(s){
 function freshBattle(){
   const ab=makeBase("ally",0), eb=makeBase("enemy",0);
   return {t:0,wall:0,units:[ab,eb],allyBase:ab,enemyBase:eb,allyAge:0,enemyAge:0,evo:0,
-    spawnQ:[],spawnT:0,qLock:false,bossSpawned:0,lastBossWall:0,meteorNext:0,meteorWarn:null,
+    spawnQ:[],spawnT:0,qLock:false,qCool:0,qCoolWrong:false,wrongStreak:0,noSkip:false,burstMax:BURST_SECONDS,
+    bossSpawned:0,lastBossWall:0,meteorNext:0,meteorWarn:null,
     enemySpawnTimer:1.5,enemySpawnInterval:CFG.spawnInterval,enemyAgeClock:0,
     kills:0,score:0,done:false,win:false,paused:false,
     phase:"solve",solveFreeze:true,burstTimer:0,
@@ -664,6 +665,7 @@ const BOSS_SLAM_CD=6;         // 보스 내려찍기 주기(초)
 const BOSS_SLAM_R=95;         // 내려찍기 광역 반경
 const BOSS_GOLD=15, BOSS_EVO=8;  // 보스 격파 보상
 const METEOR_R=70;            // 메테오 폭발 반경(정예전 전용)
+const WRONG_CD=3, WRONG_CD_STEP=1.5, WRONG_CD_MAX=7;  // 오답 재정비: 찍기 방지(연속 오답 시 누적)
 let curQ=null, curConcept=null, curDispAns=0;
 
 /* ----- 연출(FX) 시스템 : 캔버스 좌표(0..1000, 0..340) 기준 ----- */
@@ -874,13 +876,17 @@ function enterSolvePhase(){
 }
 function enterBurstPhase(){
   if(!G)return;
-  G.phase="burst"; G.solveFreeze=false; G.burstTimer=BURST_SECONDS;
+  G.phase="burst"; G.solveFreeze=false; G.burstTimer=BURST_SECONDS; G.burstMax=BURST_SECONDS; G.noSkip=false;
   document.getElementById("burstRow").classList.remove("hide");
   document.getElementById("qHeadTxt").textContent="⚔ 돌격! 부대가 전진하는 중…";
   const pb=document.getElementById("phaseBadge");
   pb.className="phaseBadge show burst";
 }
-function skipBurst(){ if(G&&!G.ended&&!G.paused&&G.phase==="burst") G.burstTimer=0; }
+function skipBurst(){
+  if(!G||G.ended||G.paused||G.phase!=="burst")return;
+  if(G.noSkip){ toast("오답 재정비 중 — 건너뛸 수 없다","var(--bad)"); return; }
+  G.burstTimer=0;
+}
 function pick(k){
   if(!G||G.ended||G.mode!=="solo")return;
   if(G.paused){ toast("일시정지 중 — ▶ 계속하기를 누르세요","var(--line)"); return; }
@@ -924,8 +930,23 @@ function pick(k){
   }
   document.getElementById("qCombo").textContent=G.combo;
   document.getElementById("hScore").textContent=G.score;
-  if(CFG.realtime){ setTimeout(()=>{ if(G&&!G.ended) nextQuestion(); },550); }   // 정예전: 즉시 다음 문제
-  else enterBurstPhase();   // 정찰전: 잠시 라이브 돌격 후 다음 문제
+  if(correct)G.wrongStreak=0; else G.wrongStreak++;
+  const pen=correct?0:Math.min(WRONG_CD_MAX, WRONG_CD+(G.wrongStreak-1)*WRONG_CD_STEP);
+  if(CFG.realtime){
+    // 정예전: 정답은 곧장, 오답은 '재정비' 대기(찍기 방지) — 그동안 전투는 계속된다
+    G.qCool=correct?0.55:pen; G.qCoolWrong=!correct;
+  } else {
+    enterBurstPhase();
+    G.noSkip=!correct;                      // 오답: 건너뛰기 금지
+    if(!correct){ G.burstTimer=BURST_SECONDS+pen; }
+    G.burstMax=G.burstTimer;
+    if(!correct){
+      flash.textContent="✗ 오답 — 재정비 "+Math.round(G.burstTimer)+"초 (건너뛰기 불가)";
+      document.getElementById("burstSkip").classList.add("hide");
+    } else {
+      document.getElementById("burstSkip").classList.remove("hide");
+    }
+  }
 }
 function comboMilestone(n){
   if(!(n===3||n===5||(n>=10&&n%5===0)))return;
@@ -1002,6 +1023,7 @@ function loop(ts){
         const sdt=dt*BATTLE_SPEED;        // 2P: 항상 정상 속도 실시간
         processSpawnQ(sdt);
         stepBattle(G,sdt);
+        duoCooldownTick(dt);
         duoOvertimeCheck();
         suddenDeath(dt);
         if(bannerTimer>0){bannerTimer-=dt;if(bannerTimer<=0)document.getElementById("waveBanner").classList.remove("show");}
@@ -1021,9 +1043,17 @@ function loop(ts){
         meteorTick(dt);
         updateEnemyAI(G,sdt);
         stepBattle(G,sdt);
+        if(CFG.realtime && G.qCool>0){
+          G.qCool-=dt;
+          if(G.qCoolWrong){
+            const f=document.getElementById("qFlash");
+            if(f)f.textContent="✗ 오답 — 재정비 "+Math.ceil(Math.max(0,G.qCool))+"초… (전투는 계속된다)";
+          }
+          if(G.qCool<=0 && !G.ended) nextQuestion();
+        }
         if(!CFG.realtime && G.phase==="burst"){
           G.burstTimer-=dt;   // 돌격 카운트다운은 실시간
-          const bf=document.getElementById("burstFill"); if(bf)bf.style.width=Math.max(0,G.burstTimer/BURST_SECONDS*100)+"%";
+          const bf=document.getElementById("burstFill"); if(bf)bf.style.width=Math.max(0,Math.min(100,G.burstTimer/(G.burstMax||BURST_SECONDS)*100))+"%";
           const pb=document.getElementById("phaseBadge"); if(pb)pb.textContent="⚔ 돌격! 다음 문제까지 "+Math.ceil(Math.max(0,G.burstTimer))+"초";
           if(G.burstTimer<=0 && !G.ended) nextQuestion();
         }
@@ -1361,7 +1391,7 @@ function setSoloUiVisible(v){
   document.getElementById("hAllyLabel").textContent=v?"아군 기지":"1P 기지 (왼쪽)";
   document.getElementById("hEnemyLabel").textContent=v?"적 기지":"2P 기지 (오른쪽)";
 }
-function mkDuoPlayer(side){ return {side,q:[],qt:0,gold:0,combo:0,maxCombo:0,totalTry:0,totalCorrect:0,diagStat:{},evo:0,age:0,kills:0,di:0,curQ:null,curC:null,ans:0,lock:false}; }
+function mkDuoPlayer(side){ return {side,q:[],qt:0,cool:0,coolWrong:false,wrongStreak:0,gold:0,combo:0,maxCombo:0,totalTry:0,totalCorrect:0,diagStat:{},evo:0,age:0,kills:0,di:0,curQ:null,curC:null,ans:0,lock:false}; }
 function buildDuoDeck(){
   // 공정성: 두 사람 모두 같은 "개념 순서"를 밟는다.
   // 커닝 방지: 같은 슬롯이라도 두 사람이 받는 "문제 자체"는 다르다 → 옆 화면 답 베끼기 무의미.
@@ -1442,8 +1472,23 @@ function duoPick(pi,k){
     flash.textContent="✗ 오답 — 다음 문제로";
     sWrong();
   }
+  if(correct)pl.wrongStreak=0; else pl.wrongStreak++;
+  pl.cool = correct?0.55:Math.min(WRONG_CD_MAX, WRONG_CD+(pl.wrongStreak-1)*WRONG_CD_STEP);
+  pl.coolWrong=!correct;
   updateDuoHud();
-  setTimeout(()=>duoNextQ(pi),550);
+}
+function duoCooldownTick(dt){
+  for(let pi=0;pi<2;pi++){
+    const pl=G.duo.p[pi];
+    if(pl.cool>0){
+      pl.cool-=dt;
+      if(pl.coolWrong){
+        const f=document.getElementById("d"+pi+"_flash");
+        if(f)f.textContent="✗ 오답 — 재정비 "+Math.ceil(Math.max(0,pl.cool))+"초…";
+      }
+      if(pl.cool<=0 && !G.ended) duoNextQ(pi);
+    }
+  }
 }
 function duoComboFx(pi,n){
   const cb=document.getElementById("comboBanner");
