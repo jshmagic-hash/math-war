@@ -196,7 +196,11 @@
   .devo i{position:absolute;left:0;top:0;bottom:0;width:0%;background:rgba(217,140,255,.22);}
   .devo span{position:relative;}
   .dq .dqc{margin-bottom:4px;}
-  .dqt{font-size:14px;font-weight:700;line-height:1.45;margin:4px 0 6px;min-height:38px;}
+  .dqbody{display:flex;gap:7px;align-items:flex-start;margin:4px 0 6px;}
+  .dqfig{flex:0 0 96px;background:rgba(10,26,44,.6);border:1px solid var(--line-soft);border-radius:8px;padding:3px;}
+  .dqfig svg{width:100%;height:auto;display:block;}
+  .dqfig:empty{display:none;}
+  .dqt{flex:1;font-size:14px;font-weight:700;line-height:1.45;min-height:38px;}
   .dopts{display:grid;grid-template-columns:1fr 1fr;gap:4px;}
   .dopt{border:1.5px solid var(--line-soft);background:rgba(91,143,199,.06);color:var(--ink);border-radius:8px;padding:9px 4px;cursor:pointer;font-size:13px;font-family:'Courier New',monospace;font-weight:700;text-align:center;}
   .dopt.correct{border-color:var(--good);background:rgba(95,227,161,.18);color:var(--good);}
@@ -311,7 +315,10 @@
         <button class="devo" id="d0_evo" onpointerdown="duoEvolve(0)" disabled><i id="d0_evofill"></i><span id="d0_evotxt">⬆ 진화</span></button>
         <div class="dq">
           <span class="qconcept dqc" id="d0_qc">개념</span>
-          <div class="dqt" id="d0_qt">문제</div>
+          <div class="dqbody">
+            <div class="dqfig" id="d0_fig"></div>
+            <div class="dqt" id="d0_qt">문제</div>
+          </div>
           <div class="dopts" id="d0_opts"></div>
           <div class="dflash" id="d0_flash"></div>
         </div>
@@ -322,7 +329,10 @@
         <button class="devo" id="d1_evo" onpointerdown="duoEvolve(1)" disabled><i id="d1_evofill"></i><span id="d1_evotxt">⬆ 진화</span></button>
         <div class="dq">
           <span class="qconcept dqc" id="d1_qc">개념</span>
-          <div class="dqt" id="d1_qt">문제</div>
+          <div class="dqbody">
+            <div class="dqfig" id="d1_fig"></div>
+            <div class="dqt" id="d1_qt">문제</div>
+          </div>
           <div class="dopts" id="d1_opts"></div>
           <div class="dflash" id="d1_flash"></div>
         </div>
@@ -393,7 +403,7 @@ const BASE_ATK=12, BASE_RANGE=160, BASE_CD=1.1;
 const ENEMY_AGE_AT=[5,11,19,30];
 const DIFF={
   easy:{baseHp:1500,enemyMult:0.74,spawnInterval:3.0,enemyAgeScale:1.5,ageFloorSec:85,ageFloorCap:2,bossHp:6,bossAtk:2.2},
-  hard:{baseHp:1500,enemyMult:0.86,spawnInterval:2.5,enemyAgeScale:1.0,ageFloorSec:75,ageFloorCap:4,otBonus:1.2,
+  hard:{baseHp:1500,enemyMult:0.84,spawnInterval:2.55,enemyAgeScale:1.0,ageFloorSec:75,ageFloorCap:4,otBonus:1.2,
         realtime:true,meteor:true,bossHp:9,bossAtk:3}
 };
 let CFG=DIFF.hard;
@@ -802,7 +812,7 @@ function buildSummonBar(){
   }
 }
 function summon(tk){
-  if(!G||G.ended)return;
+  if(!G||G.ended||G.paused)return;
   const t=UNIT_TYPES[tk];
   if(G.gold>=t.cost){
     G.gold-=t.cost;
@@ -870,9 +880,11 @@ function enterBurstPhase(){
   const pb=document.getElementById("phaseBadge");
   pb.className="phaseBadge show burst";
 }
-function skipBurst(){ if(G&&!G.ended&&G.phase==="burst") G.burstTimer=0; }
+function skipBurst(){ if(G&&!G.ended&&!G.paused&&G.phase==="burst") G.burstTimer=0; }
 function pick(k){
-  if(!G||G.ended||G.mode!=="solo"||G.phase!=="solve"||G.qLock)return;
+  if(!G||G.ended||G.mode!=="solo")return;
+  if(G.paused){ toast("일시정지 중 — ▶ 계속하기를 누르세요","var(--line)"); return; }
+  if(G.phase!=="solve"||G.qLock)return;
   G.qLock=true;
   const correct=k===curDispAns;
   G.totalTry++;
@@ -953,7 +965,7 @@ function updateEvoBtn(){
   btn.disabled=!can; btn.classList.toggle("ready",can);
 }
 function doEvolve(){
-  if(!G||G.ended||!canEvolve(G))return;
+  if(!G||G.ended||G.paused||!canEvolve(G))return;
   if(evolveAlly(G)){
     announceAge(); updateEvoBtn(); updateSummonBar();
     // ===== 진화 컷신 =====
@@ -1392,6 +1404,7 @@ function duoNextQ(pi){
   const cc=document.getElementById("d"+pi+"_qc");
   cc.textContent=CONCEPT_NAME[item.c]+" 계열";
   cc.style.background=CONCEPT_COLOR[item.c]+"22"; cc.style.color=CONCEPT_COLOR[item.c];
+  document.getElementById("d"+pi+"_fig").innerHTML=pl.curQ.fig?pl.curQ.fig():"";
   document.getElementById("d"+pi+"_qt").innerHTML=pl.curQ.q;
   document.getElementById("d"+pi+"_opts").innerHTML=dispOpts.map((o,k)=>`<button class="dopt" onpointerdown="duoPick(${pi},${k})">${o}</button>`).join("");
   document.getElementById("d"+pi+"_flash").textContent="";
